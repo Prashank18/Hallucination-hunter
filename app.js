@@ -257,10 +257,10 @@ Respond in JSON:
   const results = result.results || [];
   return results.map(r => {
     const srcName = (r.source || '').toLowerCase().trim();
-    // If the LLM gave a specific URL (contains a path beyond domain), keep it
-    // Otherwise fall back to whitelist
-    if (r.sourceUrl && r.sourceUrl.includes('/') && r.sourceUrl.split('/').length > 4) {
-      // Looks like a specific page URL — keep it
+    // If the LLM gave any valid URL starting with http(s), keep it as source
+    // Otherwise fall back to known source URLs
+    if (r.sourceUrl && /^https?:\/\//i.test(r.sourceUrl)) {
+      // Valid URL from LLM — keep it
     } else if (knownSourceUrls.hasOwnProperty(srcName)) {
       r.sourceUrl = knownSourceUrls[srcName];
     } else {
