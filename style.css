@@ -2954,3 +2954,77 @@ html {
 .claim-source-direct a:hover {
   text-decoration: underline;
 }
+
+/* ── Confidence Bar ─────────────────────────────────── */
+.conf-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+.conf-bar-track {
+  flex: 1;
+  height: 6px;
+  background: #e2e8f0;
+  border-radius: 99px;
+  position: relative;
+  overflow: visible;
+}
+.conf-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.4s ease, background 0.3s ease;
+  min-width: 4px;
+}
+.conf-bar-threshold {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 14px;
+  background: #6c63ff;
+  border-radius: 2px;
+  transition: left 0.2s ease;
+  cursor: help;
+}
+.conf-bar-threshold::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  width: 8px;
+  height: 8px;
+  background: #6c63ff;
+  border-radius: 50%;
+}
+.conf-bar-label {
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 32px;
+  text-align: right;
+}
+
+/* ── Below-Threshold Cards ──────────────────────────── */
+.claim-card.below-threshold {
+  opacity: 0.5;
+  filter: grayscale(40%);
+  border-color: #f59e0b !important;
+  transition: opacity 0.3s ease, filter 0.3s ease;
+}
+.claim-card.below-threshold:hover {
+  opacity: 0.8;
+  filter: grayscale(0%);
+}
+.threshold-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 99px;
+  margin-bottom: 8px;
+  border: 1px solid #fcd34d;
+}
+
