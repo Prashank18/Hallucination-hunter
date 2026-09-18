@@ -140,7 +140,7 @@ async function callGroq(messages, temperature = 0.1) {
   const body = { model: GROQ_MODEL, messages, temperature, response_format: { type: 'json_object' } };
   let res;
 
-  if (IS_LOCAL && window.GROQ_API_KEY) {
+  if (window.GROQ_API_KEY) {
     res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${window.GROQ_API_KEY}` },
