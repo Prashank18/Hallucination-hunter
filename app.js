@@ -428,13 +428,25 @@ Respond in JSON:
   };
 
   const results = result.results || [];
-  // STRICT validation: only whitelisted sources get URLs, everything else → null
+  // Source URL: prefer LLM's specific URL, fallback to whitelist homepage
   return results.map(r => {
     const srcName = (r.source || '').toLowerCase().trim();
-    if (knownSourceUrls.hasOwnProperty(srcName)) {
-      r.sourceUrl = knownSourceUrls[srcName]; // Use verified URL (or null)
-    } else {
-      // NOT in whitelist → strip any LLM-generated URL (likely hallucinated)
+    const llmUrl = r.sourceUrl;
+    
+    // 1. If LLM gave a valid URL with a path (specific page), always keep it
+    if (llmUrl && /^https?:\/\/[a-z0-9.-]+\.[a-z]{2,}\//i.test(llmUrl)) {
+      r.sourceUrl = llmUrl;
+    }
+    // 2. Fallback: use whitelist homepage URL for known sources
+    else if (knownSourceUrls.hasOwnProperty(srcName) && knownSourceUrls[srcName]) {
+      r.sourceUrl = knownSourceUrls[srcName];
+    }
+    // 3. Keep any valid http URL from LLM even without path
+    else if (llmUrl && /^https?:\/\//i.test(llmUrl)) {
+      r.sourceUrl = llmUrl;
+    }
+    // 4. No URL
+    else {
       r.sourceUrl = null;
     }
     return r;
