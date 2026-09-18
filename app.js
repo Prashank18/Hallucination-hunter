@@ -538,18 +538,29 @@ function buildCards(claims) {
     false: `<img src="incorrect-icon.png" alt="Incorrect" class="badge-icon">`
   };
   const labels = { verified: 'Verified', unverifiable: 'Unverifiable', false: 'Incorrect' };
+  const threshold = parseInt($('#s-conf-range')?.value || '75', 10);
 
   claims.forEach((c, i) => {
     const card = document.createElement('div');
     card.className = 'claim-card';
     card.dataset.status = c.status;
+    card.dataset.confidence = c.confidence;
     card.style.animationDelay = `${i * 0.05}s`;
-    const isOn = c.status === 'verified';
+
+    // Real-time threshold: dim card if below threshold
+    const belowThreshold = c.confidence < threshold;
+    if (belowThreshold) card.classList.add('below-threshold');
+
+    const isOn = c.status === 'verified' && !belowThreshold;
     const srcLink = c.sourceUrl
       ? `<a href="${c.sourceUrl}" target="_blank" rel="noopener">${escapeHtml(c.source)}</a>`
       : `<span>${escapeHtml(c.source)}</span>`;
 
+    // Confidence bar color
+    const confColor = c.confidence >= 80 ? '#22c55e' : c.confidence >= 60 ? '#f59e0b' : '#ef4444';
+
     card.innerHTML = `
+      ${belowThreshold ? `<div class="threshold-badge">⚠️ Below ${threshold}% threshold</div>` : ''}
       <div class="claim-card-top">
         <div class="claim-icon">${icons[c.status]}</div>
         <div class="claim-card-info">
@@ -557,6 +568,13 @@ function buildCards(claims) {
           <div class="claim-card-sub">${c.confidence}% confidence</div>
         </div>
         <label class="toggle"><input type="checkbox" ${isOn ? 'checked' : ''} disabled><span class="toggle-slider"></span></label>
+      </div>
+      <div class="conf-bar-wrap">
+        <div class="conf-bar-track">
+          <div class="conf-bar-fill" style="width:${c.confidence}%;background:${confColor}"></div>
+          <div class="conf-bar-threshold" style="left:${threshold}%" title="Threshold: ${threshold}%"></div>
+        </div>
+        <span class="conf-bar-label" style="color:${confColor}">${c.confidence}%</span>
       </div>
       <p class="claim-desc">${escapeHtml(c.text)}</p>
       <div class="claim-source-direct">
@@ -851,7 +869,56 @@ async function loadSettings() {
 }
 
 $('#s-conf-range').addEventListener('input', e => {
-  $('#s-conf-val').textContent = e.target.value + '%';
+  const threshold = parseInt(e.target.value, 10);
+  $('#s-conf-val').textContent = threshold + '%';
+
+  // REAL-TIME: instantly re-apply threshold to all visible claim cards
+  if (currentClaims && currentClaims.length > 0) {
+    $$('.claim-card').forEach(card => {
+      const conf = parseInt(card.dataset.confidence || '0', 10);
+      const belowThreshold = conf < threshold;
+      card.classList.toggle('below-threshold', belowThreshold);
+
+      // Update the threshold badge
+      let badge = card.querySelector('.threshold-badge');
+      if (belowThreshold) {
+        if (!badge) {
+          badge = document.createElement('div');
+          badge.className = 'threshold-badge';
+          card.insertBefore(badge, card.firstChild);
+        }
+        badge.textContent = `⚠️ Below ${threshold}% threshold`;
+      } else {
+        if (badge) badge.remove();
+      }
+
+      // Update threshold line on confidence bar
+      const line = card.querySelector('.conf-bar-threshold');
+      if (line) {
+        line.style.left = threshold + '%';
+        line.title = `Threshold: ${threshold}%`;
+      }
+
+      // Update toggle to reflect new effective status
+      const toggle = card.querySelector('input[type=checkbox]');
+      if (toggle) {
+        toggle.checked = card.dataset.status === 'verified' && !belowThreshold;
+      }
+    });
+
+    // Recalculate stats live
+    const threshold2 = threshold;
+    const active = currentClaims.filter(c => c.confidence >= threshold2);
+    const vCount = active.filter(c => c.status === 'verified').length;
+    const uCount = active.filter(c => c.status === 'unverifiable').length;
+    const fCount = active.filter(c => c.status === 'false').length;
+    const total = currentClaims.length;
+    const trustScore = total > 0 ? Math.round((vCount / total) * 100) : 0;
+    $('#s-verified').textContent = vCount;
+    $('#s-unverifiable').textContent = uCount;
+    $('#s-false').textContent = fCount;
+    $('#score-val').textContent = trustScore;
+  }
 });
 
 $('#btn-save-settings').addEventListener('click', async () => {
