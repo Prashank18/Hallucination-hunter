@@ -1,4 +1,3 @@
-// Hallucination Hunter v2.1 - Updated 2026-09-18
 // ═══════════════════════════════════════════
 // HALLUCINATION HUNTER — Full App with Supabase
 // ═══════════════════════════════════════════
@@ -330,32 +329,22 @@ async function findRealSources(claims) {
   return claims.map(claim => {
     const claimText = claim.text || '';
     const topic = claimText.replace(/["']/g, '').substring(0, 100);
-    const sourceName = (claim.source || '').toLowerCase();
+    const url = (claim.sourceUrl || '').trim();
 
-    // ALWAYS generate a real Google search URL - LLM URLs are fake
-    const lc = claimText.toLowerCase();
-    if (lc.match(/nasa|space|planet|moon|mars|orbit|solar|sun|star|galaxy/)) {
-      if (!claim.source || sourceName === 'no source available') claim.source = 'NASA / Space Science';
-      claim.sourceUrl = 'https://www.google.com/search?q=' + encodeURIComponent(topic + ' site:nasa.gov');
-    } else if (lc.match(/health|disease|body|heart|brain|medical|virus|covid|vaccine|bone|blood/)) {
-      if (!claim.source || sourceName === 'no source available') claim.source = 'WHO / Medical Research';
-      claim.sourceUrl = 'https://www.google.com/search?q=' + encodeURIComponent(topic + ' site:who.int OR site:nih.gov');
-    } else if (lc.match(/history|war|ancient|century|king|empire|dynasty|built|founded/)) {
-      if (!claim.source || sourceName === 'no source available') claim.source = 'Historical Records';
-      claim.sourceUrl = 'https://www.google.com/search?q=' + encodeURIComponent(topic + ' site:britannica.com');
-    } else if (lc.match(/country|population|capital|continent|ocean|river|mountain|wall|china|india/)) {
-      if (!claim.source || sourceName === 'no source available') claim.source = 'World Factbook';
-      claim.sourceUrl = 'https://www.google.com/search?q=' + encodeURIComponent(topic + ' site:britannica.com OR site:wikipedia.org');
-    } else if (lc.match(/python|javascript|programming|software|technology|computer|ai|algorithm/)) {
-      if (!claim.source || sourceName === 'no source available') claim.source = 'Tech Documentation';
-      claim.sourceUrl = 'https://www.google.com/search?q=' + encodeURIComponent(topic + ' site:wikipedia.org');
-    } else if (lc.match(/boil|celsius|fahrenheit|water|temperature|chemical|element|atom/)) {
-      if (!claim.source || sourceName === 'no source available') claim.source = 'Science Reference';
-      claim.sourceUrl = 'https://www.google.com/search?q=' + encodeURIComponent(topic + ' site:wikipedia.org OR site:britannica.com');
-    } else {
-      if (!claim.source || sourceName === 'no source available') claim.source = 'Verified Source';
+    // Check if LLM returned a REAL URL (not fake/example/empty)
+    const isFakeUrl = !url || url === 'null' || url.includes('example.org') || url.includes('example.com') || url.length < 10;
+
+    if (isFakeUrl) {
+      // LLM didn't give a real URL - generate Google search as fallback
       claim.sourceUrl = 'https://www.google.com/search?q=' + encodeURIComponent(topic + ' ' + (claim.source || 'fact check'));
     }
+    // else: KEEP the exact URL that Groq returned (e.g. https://en.wikipedia.org/wiki/Mars)
+
+    // If source name is missing, set one
+    if (!claim.source || claim.source === 'No source available' || claim.source === 'Unknown source') {
+      claim.source = 'Verified Source';
+    }
+
     return claim;
   });
 }
