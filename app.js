@@ -1,4 +1,4 @@
-// Hallucination Hunter v2.1 - Updated 2026-09-18
+// v2.2 - Sources always show clickable Google links - 2026-09-18 20:52
 // ═══════════════════════════════════════════
 // HALLUCINATION HUNTER — Full App with Supabase
 // ═══════════════════════════════════════════
