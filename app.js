@@ -417,6 +417,25 @@ async function runAnalysis(text) {
     const withRealSources = await findRealSources(verified);
     
     currentClaims = withRealSources;
+
+    // ── AUTO-SET threshold from REAL Groq confidence scores ──────────
+    // Groq returns actual confidence per claim (e.g. 92%, 78%, 65%)
+    // Slider auto-moves to (min confidence - 5) so ALL claims are shown
+    if (withRealSources.length > 0) {
+      const scores = withRealSources.map(c => c.confidence);
+      const minConf  = Math.min(...scores);
+      const avgConf  = Math.round(scores.reduce((a,b) => a + b, 0) / scores.length);
+      // clamp between slider's min(50) and max(95)
+      const autoVal  = Math.max(50, Math.min(95, minConf - 5));
+      const slider   = $('#s-conf-range');
+      const sliderLbl = $('#s-conf-val');
+      if (slider) {
+        slider.value = autoVal;
+        if (sliderLbl) sliderLbl.textContent = autoVal + '%';
+      }
+      showToast(`Threshold auto-set to ${autoVal}%  (avg confidence: ${avgConf}%)`, 'info');
+    }
+
     displayResults(text, withRealSources);
 
     // Save to Supabase
