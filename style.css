@@ -2928,3 +2928,29 @@ html {
 .api-key-cancel:hover {
   background: var(--surface);
 }
+
+/* Source link shown directly on claim card */
+.claim-source-direct {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 6px 10px;
+  background: #f0f7ff;
+  border-radius: 6px;
+  font-size: 13px;
+  border-left: 3px solid #4A90D9;
+}
+.claim-source-direct svg {
+  flex-shrink: 0;
+  color: #4A90D9;
+}
+.claim-source-direct a {
+  color: #2563eb;
+  text-decoration: none;
+  font-weight: 500;
+  word-break: break-all;
+}
+.claim-source-direct a:hover {
+  text-decoration: underline;
+}
