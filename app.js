@@ -1,7 +1,23 @@
 // ═══════════════════════════════════════════
-// HALLUCINATION HUNTER — Round 1 (No Database)
-// Features: Core Analyzer + Voice Input
+// HALLUCINATION HUNTER — Full App with Supabase
 // ═══════════════════════════════════════════
+
+const SUPABASE_URL = 'https://jdvafpwancenabxbnxbh.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpkdmFmcHdhbmNlbmFieGJueGJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYxMDMwNjgsImV4cCI6MjEwMTY3OTA2OH0.xVZOUOiO_uDzRLHbZ9jjCjV8bZ8cUpZaQINzIgn6QlA';
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ─── Anonymous User Isolation ────────────
+// Each browser gets a unique ID — users only see their own data
+function getUserId() {
+  let id = localStorage.getItem('hh_user_id');
+  if (!id) {
+    id = crypto.randomUUID ? crypto.randomUUID() : 'u-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    localStorage.setItem('hh_user_id', id);
+  }
+  return id;
+}
+const userId = getUserId();
 
 // ─── Helpers ─────────────────────────────
 const $ = s => document.querySelector(s);
@@ -34,10 +50,10 @@ function showToast(message, type = 'info') {
     info: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>'
   };
   const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
-  toast.innerHTML = `<span class="toast-icon">${icons[type] || icons.info}</span><span>${message}</span>`;
+  toast.className = `toast ${type}`;
+  toast.innerHTML = `<span class="toast-icon">${icons[type]}</span>${message}`;
   toastContainer.appendChild(toast);
-  setTimeout(() => { toast.classList.add('fade-out'); setTimeout(() => toast.remove(), 300); }, 3500);
+  setTimeout(() => { toast.style.opacity = '0'; toast.style.transition = 'opacity 0.3s'; setTimeout(() => toast.remove(), 300); }, 3500);
 }
 
 // ═══════════════════════════════════════════
@@ -53,6 +69,10 @@ $$('.sidebar-link').forEach(link => {
     link.classList.add('active');
     $(`#view-${link.dataset.view}`).classList.add('active');
 
+    // Load data when switching views
+    if (link.dataset.view === 'history') loadHistory();
+    if (link.dataset.view === 'settings') { loadSettings(); checkDbStatus(); }
+
     // Sync mobile nav
     document.querySelectorAll('.mobile-nav-link').forEach(m => {
       m.classList.toggle('active', m.dataset.view === link.dataset.view);
@@ -64,15 +84,69 @@ $$('.sidebar-link').forEach(link => {
 function switchView(viewName) {
   $$('.sidebar-link').forEach(l => l.classList.remove('active'));
   $$('.view').forEach(v => v.classList.remove('active'));
+
+  // Sources is a sub-tab inside analyzer, not a separate view
+  if (viewName === 'sources') {
+    $(`#view-analyzer`).classList.add('active');
+    // Activate sources sub-tab
+    $$('#analyzer-tabs .tab').forEach(t => t.classList.remove('active'));
+    $$('.subtab-content').forEach(c => c.classList.remove('active'));
+    const srcTab = document.querySelector('[data-subtab="sources"]');
+    if (srcTab) srcTab.classList.add('active');
+    const srcContent = $('#subtab-sources');
+    if (srcContent) srcContent.classList.add('active');
+    loadSources();
+    // Sync sidebar to analyzer
+    const sidebarMatch = document.querySelector('.sidebar-link[data-view="analyzer"]');
+    if (sidebarMatch) sidebarMatch.classList.add('active');
+    return;
+  }
+
   $(`#view-${viewName}`).classList.add('active');
+
+  // Sync sidebar
   const sidebarMatch = document.querySelector(`.sidebar-link[data-view="${viewName}"]`);
   if (sidebarMatch) sidebarMatch.classList.add('active');
+
+  // Load data
+  if (viewName === 'history') loadHistory();
+  if (viewName === 'settings') { loadSettings(); checkDbStatus(); }
 }
 
 function updateMobileNav(btn) {
   document.querySelectorAll('.mobile-nav-link').forEach(m => m.classList.remove('active'));
   btn.classList.add('active');
 }
+
+// ═══════════════════════════════════════════
+// ANALYZER SUB-TABS (Verify / How it works / Sources)
+// ═══════════════════════════════════════════
+
+$('#analyzer-tabs').addEventListener('click', e => {
+  const btn = e.target.closest('[data-subtab]');
+  if (!btn) return;
+  $$('#analyzer-tabs .tab').forEach(t => t.classList.remove('active'));
+  $$('.subtab-content').forEach(c => c.classList.remove('active'));
+  btn.classList.add('active');
+  $(`#subtab-${btn.dataset.subtab}`).classList.add('active');
+
+  if (btn.dataset.subtab === 'sources') loadSources();
+});
+
+// ═══════════════════════════════════════════
+// SETTINGS SUB-TABS (General / Database)
+// ═══════════════════════════════════════════
+
+$('#settings-tabs').addEventListener('click', e => {
+  const btn = e.target.closest('[data-settab]');
+  if (!btn) return;
+  $$('#settings-tabs .tab').forEach(t => t.classList.remove('active'));
+  $$('.settab-content').forEach(c => c.classList.remove('active'));
+  btn.classList.add('active');
+  $(`#settab-${btn.dataset.settab}`).classList.add('active');
+
+  if (btn.dataset.settab === 'database') checkDbStatus();
+});
 
 // ═══════════════════════════════════════════
 // INPUT HANDLERS
@@ -133,20 +207,25 @@ document.addEventListener('mousemove', e => {
 // GROQ API — Real LLM Verification Engine
 // ═══════════════════════════════════════════
 
+// Smart API routing:
+// - Vercel deployment → calls /api/groq (serverless proxy, key hidden server-side)
+// - Local dev → calls Groq directly using config.js key
 const IS_LOCAL = location.protocol === 'file:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-const GROQ_MODEL = 'openai/gpt-oss-120b';
+const GROQ_MODEL = 'openai/gpt-oss-120b'; // updated: llama-3.3-70b-versatile was shut down Aug 16 2026
 
 async function callGroq(messages, temperature = 0.1) {
   const body = { model: GROQ_MODEL, messages, temperature, response_format: { type: 'json_object' } };
   let res;
 
   if (window.GROQ_API_KEY) {
+    // Local dev: call Groq directly with config.js key
     res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${window.GROQ_API_KEY}` },
       body: JSON.stringify(body)
     });
   } else {
+    // Vercel: call serverless proxy (API key stored as env var)
     res = await fetch('/api/groq', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -190,7 +269,9 @@ Respond in JSON format:
 
 // Step 2: Verify each claim using the LLM's knowledge
 async function verifyClaimsWithLLM(claims) {
-  const claimsList = claims.map(c => `${c.id}. "${c.text}"`).join('\n');
+  if (claims.length === 0) return [];
+
+  const claimList = claims.map(c => `[Claim ${c.id}]: "${c.text}"`).join('\n');
 
   const result = await callGroq([
     {
@@ -233,37 +314,127 @@ Respond in JSON:
   ]
 }`
     },
-    { role: 'user', content: `Verify these claims:\n${claimsList}` }
+    { role: 'user', content: `Fact-check each of these claims with absolute accuracy. Provide the REAL correct information for any false claims:\n\n${claimList}` }
   ], 0.1);
 
   // Map well-known source names to VERIFIED REAL URLs
+  // STRICT: Only sources in this map get a URL — everything else is set to null
   const knownSourceUrls = {
+    // Government & Intergovernmental
     'nasa': 'https://www.nasa.gov',
+    'nasa earth observatory': 'https://earthobservatory.nasa.gov',
     'who': 'https://www.who.int',
     'world health organization': 'https://www.who.int',
     'cdc': 'https://www.cdc.gov',
+    'centers for disease control': 'https://www.cdc.gov',
+    'centers for disease control and prevention': 'https://www.cdc.gov',
+    'fda': 'https://www.fda.gov',
+    'u.s. food and drug administration': 'https://www.fda.gov',
+    'epa': 'https://www.epa.gov',
+    'u.s. environmental protection agency': 'https://www.epa.gov',
+    'usgs': 'https://www.usgs.gov',
+    'u.s. geological survey': 'https://www.usgs.gov',
+    'cia world factbook': 'https://www.cia.gov/the-world-factbook/',
+    'unesco': 'https://www.unesco.org',
+    'unesco world heritage centre': 'https://whc.unesco.org',
+    'united nations': 'https://www.un.org',
+    'fao': 'https://www.fao.org',
+    'food and agriculture organization': 'https://www.fao.org',
+    'food and agriculture organization of the united nations': 'https://www.fao.org',
+    'world bank': 'https://www.worldbank.org',
+    'imf': 'https://www.imf.org',
+    'international monetary fund': 'https://www.imf.org',
+    'noaa': 'https://www.noaa.gov',
+    'national oceanic and atmospheric administration': 'https://www.noaa.gov',
+
+    // Medical / Health
+    'nih': 'https://www.nih.gov',
+    'national institutes of health': 'https://www.nih.gov',
+    'national institute of general medical sciences': 'https://www.nigms.nih.gov',
+    'niddk': 'https://www.niddk.nih.gov',
+    'national institute of diabetes and digestive and kidney diseases': 'https://www.niddk.nih.gov',
+    'american heart association': 'https://www.heart.org',
+    'american cancer society': 'https://www.cancer.org',
+    'american lung association': 'https://www.lung.org',
+    'american academy of orthopaedic surgeons': 'https://www.aaos.org',
+    'mayo clinic': 'https://www.mayoclinic.org',
+    'cleveland clinic': 'https://my.clevelandclinic.org',
+    'johns hopkins medicine': 'https://www.hopkinsmedicine.org',
+    'harvard health': 'https://www.health.harvard.edu',
+    'harvard health publishing': 'https://www.health.harvard.edu',
+    'webmd': 'https://www.webmd.com',
+    'medlineplus': 'https://medlineplus.gov',
+    'pubmed': 'https://pubmed.ncbi.nlm.nih.gov',
+
+    // Academic / Science
+    'nature': 'https://www.nature.com',
+    'science': 'https://www.science.org',
+    'scientific american': 'https://www.scientificamerican.com',
+    'arxiv': 'https://arxiv.org',
+    'mit technology review': 'https://www.technologyreview.com',
+    'royal society': 'https://royalsociety.org',
+
+    // Reference / Encyclopedia
     'wikipedia': 'https://en.wikipedia.org',
     'britannica': 'https://www.britannica.com',
+    'encyclopedia britannica': 'https://www.britannica.com',
     'national geographic': 'https://www.nationalgeographic.com',
-    'nih': 'https://www.nih.gov',
+    'smithsonian': 'https://www.si.edu',
+    'smithsonian institution': 'https://www.si.edu',
+    'library of congress': 'https://www.loc.gov',
+
+    // News / Media
+    'bbc': 'https://www.bbc.com',
+    'bbc news': 'https://www.bbc.com/news',
+    'reuters': 'https://www.reuters.com',
+    'associated press': 'https://apnews.com',
+    'ap news': 'https://apnews.com',
+    'the new york times': 'https://www.nytimes.com',
+    'the guardian': 'https://www.theguardian.com',
+    'the washington post': 'https://www.washingtonpost.com',
+
+    // Tech
     'python software foundation': 'https://www.python.org',
     'python.org': 'https://www.python.org',
+    'mozilla developer network': 'https://developer.mozilla.org',
+    'mdn': 'https://developer.mozilla.org',
+    'stack overflow': 'https://stackoverflow.com',
+    'github': 'https://github.com',
+    'tiobe': 'https://www.tiobe.com',
+    'tiobe index': 'https://www.tiobe.com/tiobe-index/',
+    'ieee': 'https://www.ieee.org',
+    'acm': 'https://www.acm.org',
+
+    // History / Culture
+    'history.com': 'https://www.history.com',
+    'history channel': 'https://www.history.com',
+    'national archives': 'https://www.archives.gov',
+    'british museum': 'https://www.britishmuseum.org',
+    'metropolitan museum of art': 'https://www.metmuseum.org',
+
+    // Sources that should NOT have URLs (LLM commonly hallucinates these)
+    'chinese historical records': null,
+    'historical records': null,
+    'general knowledge': null,
+    'common knowledge': null,
     'no source available': null,
     'no source': null,
-    'general knowledge': null,
-    'common knowledge': null
+    'various sources': null,
+    'multiple sources': null,
+    'historical consensus': null,
+    'academic consensus': null,
+    'national cultural heritage administration of china': null,
+    'national cultural heritage administration': null
   };
 
   const results = result.results || [];
+  // STRICT validation: only whitelisted sources get URLs, everything else → null
   return results.map(r => {
     const srcName = (r.source || '').toLowerCase().trim();
-    // If the LLM gave any valid URL starting with http(s), keep it as source
-    // Otherwise fall back to known source URLs
-    if (r.sourceUrl && /^https?:\/\//i.test(r.sourceUrl)) {
-      // Valid URL from LLM — keep it
-    } else if (knownSourceUrls.hasOwnProperty(srcName)) {
-      r.sourceUrl = knownSourceUrls[srcName];
+    if (knownSourceUrls.hasOwnProperty(srcName)) {
+      r.sourceUrl = knownSourceUrls[srcName]; // Use verified URL (or null)
     } else {
+      // NOT in whitelist → strip any LLM-generated URL (likely hallucinated)
       r.sourceUrl = null;
     }
     return r;
@@ -271,7 +442,7 @@ Respond in JSON:
 }
 
 // ═══════════════════════════════════════════
-// ANALYSIS PIPELINE
+// ANALYSIS PIPELINE (Real)
 // ═══════════════════════════════════════════
 
 async function runAnalysis(text) {
@@ -281,7 +452,9 @@ async function runAnalysis(text) {
 
   $$('.process-step').forEach(s => { s.classList.remove('active', 'done'); s.querySelector('.ps-status').innerHTML = ''; });
 
+  // Read actual settings from UI
   const confThreshold = parseInt($('#s-conf-range')?.value || '75', 10);
+  const sourceCount = parseInt($('#s-source-count')?.value || '3', 10);
 
   try {
     // Step 1: Extract claims via Groq
@@ -297,7 +470,7 @@ async function runAnalysis(text) {
       return;
     }
 
-    // Step 2: Search sources (visual step)
+    // Step 2: Search sources (visual step — Groq does this internally)
     await animateStepStart('ps-search');
     await delay(600);
     await animateStepDone('ps-search', 33, 66);
@@ -307,12 +480,14 @@ async function runAnalysis(text) {
     const verifyResults = await verifyClaimsWithLLM(rawClaims);
     await animateStepDone('ps-verify', 66, 100);
 
-    // Merge extraction + verification
+    // Merge extraction + verification, applying confidence threshold
     const verified = rawClaims.map(c => {
       const v = verifyResults.find(r => r.id === c.id) || {};
       let status = v.status || 'unverifiable';
       let confidence = v.confidence || 30;
 
+      // Apply confidence threshold: if confidence is below the threshold,
+      // demote "verified" claims to "unverifiable" (not confident enough)
       if (status === 'verified' && confidence < confThreshold) {
         status = 'unverifiable';
       }
@@ -332,7 +507,11 @@ async function runAnalysis(text) {
 
     currentClaims = verified;
     displayResults(text, verified);
-    showToast('Analysis complete!', 'success');
+
+    // Save to Supabase
+    await saveAnalysis(text, verified);
+    showToast('Analysis saved to database', 'success');
+    loadDashboardStats();
   } catch (err) {
     console.error('Analysis error:', err);
     showToast('Analysis failed: ' + err.message, 'error');
@@ -490,6 +669,7 @@ function buildCards(claims) {
     });
     claimsGrid.appendChild(card);
 
+    // Stagger icon animation delay
     const badgeIcon = card.querySelector('.badge-icon');
     if (badgeIcon) badgeIcon.style.animationDelay = `${i * 0.15}s`;
   });
@@ -499,6 +679,343 @@ function filterClaims(filter) {
   $$('.claim-card').forEach(card => {
     card.style.display = (filter === 'all' || card.dataset.status === filter) ? '' : 'none';
   });
+}
+
+// ═══════════════════════════════════════════
+// SUPABASE — Save Analysis
+// ═══════════════════════════════════════════
+
+async function saveAnalysis(text, claims) {
+  const vCount = claims.filter(c => c.status === 'verified').length;
+  const uCount = claims.filter(c => c.status === 'unverifiable').length;
+  const fCount = claims.filter(c => c.status === 'false').length;
+  const trustScore = claims.length > 0 ? Math.round((vCount / claims.length) * 100) : 0;
+
+  const { data: analysis, error: aErr } = await db.from('analyses').insert({
+    input_text: text,
+    trust_score: trustScore,
+    total_claims: claims.length,
+    verified_count: vCount,
+    unverifiable_count: uCount,
+    false_count: fCount,
+    user_id: userId
+  }).select().single();
+
+  if (aErr) { console.error('Save analysis error:', aErr); throw aErr; }
+
+  const claimRows = claims.map(c => ({
+    analysis_id: analysis.id,
+    claim_text: c.text,
+    status: c.status,
+    confidence: c.confidence,
+    explanation: c.explanation,
+    source_name: c.source,
+    source_url: c.sourceUrl,
+    user_id: userId
+  }));
+
+  const { error: cErr } = await db.from('claims').insert(claimRows);
+  if (cErr) { console.error('Save claims error:', cErr); throw cErr; }
+}
+
+// ═══════════════════════════════════════════
+// HISTORY VIEW
+// ═══════════════════════════════════════════
+
+async function loadHistory() {
+  const list = $('#history-list');
+  const empty = $('#history-empty');
+  const detail = $('#history-detail');
+  detail.classList.add('hidden');
+
+  const { data, error } = await db.from('analyses').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+  if (error) { showToast('Failed to load history', 'error'); console.error(error); return; }
+
+  list.innerHTML = '';
+  if (!data || data.length === 0) {
+    list.innerHTML = `<div class="empty-state" id="history-empty">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#c4bdb4" stroke-width="1.2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+      <h3>No analyses yet</h3><p>Run your first analysis and it will show up here</p>
+    </div>`;
+    return;
+  }
+
+  data.forEach(a => {
+    const scoreClass = a.trust_score >= 70 ? 'good' : a.trust_score >= 40 ? 'mid' : 'bad';
+    const preview = a.input_text.substring(0, 100) + (a.input_text.length > 100 ? '...' : '');
+    const date = new Date(a.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    const row = document.createElement('div');
+    row.className = 'history-row';
+    row.innerHTML = `
+      <div class="history-score ${scoreClass}">${a.trust_score}</div>
+      <div class="history-info">
+        <div class="history-preview">${escapeHtml(preview)}</div>
+        <div class="history-meta"><span>${date}</span><span>${a.total_claims} claims</span></div>
+      </div>
+      <div class="history-stats">
+        <span class="history-stat v">${a.verified_count} ✓</span>
+        <span class="history-stat u">${a.unverifiable_count} ?</span>
+        <span class="history-stat f">${a.false_count} ✗</span>
+      </div>
+      <button class="history-delete" data-id="${a.id}" title="Delete">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,6 5,6 21,6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </button>
+    `;
+
+    // Click row to view detail
+    row.querySelector('.history-info').addEventListener('click', () => viewHistoryDetail(a.id));
+    row.querySelector('.history-score').addEventListener('click', () => viewHistoryDetail(a.id));
+
+    // Delete button
+    row.querySelector('.history-delete').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm('Delete this analysis?')) return;
+      const { error } = await db.from('analyses').delete().eq('id', a.id).eq('user_id', userId);
+      if (error) { showToast('Delete failed', 'error'); return; }
+      showToast('Analysis deleted', 'success');
+      loadHistory();
+    });
+
+    list.appendChild(row);
+  });
+}
+
+async function viewHistoryDetail(analysisId) {
+  const detail = $('#history-detail');
+  const content = $('#history-detail-content');
+  const list = $('#history-list');
+
+  const { data: analysis } = await db.from('analyses').select('*').eq('id', analysisId).single();
+  const { data: claims } = await db.from('claims').select('*').eq('analysis_id', analysisId).order('created_at', { ascending: true });
+
+  if (!analysis || !claims) { showToast('Failed to load detail', 'error'); return; }
+
+  list.classList.add('hidden');
+  detail.classList.remove('hidden');
+
+  const scoreClass = analysis.trust_score >= 70 ? 'good' : analysis.trust_score >= 40 ? 'mid' : 'bad';
+  const date = new Date(analysis.created_at).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  const icons = {
+    verified: `<img src="verified-icon.png" alt="Verified" class="badge-icon">`,
+    unverifiable: `<img src="unverifiable-icon.png" alt="Unverifiable" class="badge-icon">`,
+    false: `<img src="incorrect-icon.png" alt="Incorrect" class="badge-icon">`
+  };
+  const labels = { verified: 'Verified', unverifiable: 'Unverifiable', false: 'Incorrect' };
+
+  let claimsHTML = '';
+  claims.forEach(c => {
+    const isOn = c.status === 'verified';
+    const srcLink = c.source_url
+      ? `<a href="${c.source_url}" target="_blank">${escapeHtml(c.source_name)}</a>`
+      : `<span>${escapeHtml(c.source_name || 'No source')}</span>`;
+
+    claimsHTML += `
+      <div class="claim-card" data-status="${c.status}">
+        <div class="claim-card-top">
+          <div class="claim-icon">${icons[c.status]}</div>
+          <div class="claim-card-info">
+            <div class="claim-card-name">${labels[c.status]}</div>
+            <div class="claim-card-sub">${c.confidence}% confidence</div>
+          </div>
+          <label class="toggle"><input type="checkbox" ${isOn ? 'checked' : ''} disabled><span class="toggle-slider"></span></label>
+        </div>
+        <p class="claim-desc">${escapeHtml(c.claim_text)}</p>
+        <div class="claim-card-bottom"><button class="view-detail-btn" onclick="this.nextElementSibling.classList.toggle('hidden'); this.textContent = this.nextElementSibling.classList.contains('hidden') ? 'View details' : 'Hide details';">View details</button>
+        <div class="claim-detail hidden">
+          <div class="claim-explain">${escapeHtml(c.explanation || '')}</div>
+          <div class="claim-src">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            ${srcLink}
+          </div>
+        </div></div>
+      </div>
+    `;
+  });
+
+  content.innerHTML = `
+    <div class="section-label" style="margin-bottom: 16px;">
+      <div>
+        <h2>Analysis from ${date}</h2>
+        <p>Trust score: <strong style="color: var(--${scoreClass === 'good' ? 'green' : scoreClass === 'mid' ? 'amber' : 'red'})">${analysis.trust_score}%</strong> · ${analysis.total_claims} claims extracted</p>
+      </div>
+      <div class="summary-row" style="margin-top: 8px; justify-content: flex-start; gap: 8px;">
+        <span class="history-stat v">${analysis.verified_count} verified</span>
+        <span class="history-stat u">${analysis.unverifiable_count} unverifiable</span>
+        <span class="history-stat f">${analysis.false_count} incorrect</span>
+      </div>
+    </div>
+    <div class="annotated-card" style="margin-bottom: 24px;">${escapeHtml(analysis.input_text)}</div>
+    <h3 style="font-size: 0.95rem; font-weight: 600; color: var(--text-900); margin-bottom: 14px;">Claims</h3>
+    <div class="claims-grid">${claimsHTML}</div>
+  `;
+}
+
+$('#btn-back-history').addEventListener('click', () => {
+  $('#history-detail').classList.add('hidden');
+  $('#history-list').classList.remove('hidden');
+});
+
+$('#btn-clear-history').addEventListener('click', async () => {
+  if (!confirm('Delete ALL analysis history? This cannot be undone.')) return;
+  const { error } = await db.from('analyses').delete().eq('user_id', userId);
+  if (error) { showToast('Failed to clear history', 'error'); return; }
+  showToast('History cleared', 'success');
+  loadHistory();
+});
+
+// ═══════════════════════════════════════════
+// SOURCES VIEW
+// ═══════════════════════════════════════════
+
+async function loadSources() {
+  const list = $('#sources-list');
+
+  const { data, error } = await db.from('claims').select('source_name, source_url, status').eq('user_id', userId);
+  if (error) { showToast('Failed to load sources', 'error'); return; }
+
+  if (!data || data.length === 0) {
+    list.innerHTML = `<div class="empty-state small-empty">
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#c4bdb4" stroke-width="1.2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      <h3>No sources yet</h3><p>Run an analysis to start building your source database</p>
+    </div>`;
+    return;
+  }
+
+  // Aggregate by source name
+  const sourceMap = {};
+  data.forEach(c => {
+    const name = c.source_name || 'Unknown source';
+    if (!sourceMap[name]) sourceMap[name] = { name, url: c.source_url, count: 0, statuses: [] };
+    sourceMap[name].count++;
+    sourceMap[name].statuses.push(c.status);
+  });
+
+  const sources = Object.values(sourceMap).sort((a, b) => b.count - a.count);
+
+  list.innerHTML = '';
+  sources.forEach(s => {
+    const vCount = s.statuses.filter(st => st === 'verified').length;
+    const fCount = s.statuses.filter(st => st === 'false').length;
+    const nameHTML = s.url ? `<a href="${s.url}" target="_blank">${escapeHtml(s.name)}</a>` : escapeHtml(s.name);
+
+    const row = document.createElement('div');
+    row.className = 'source-row';
+    row.innerHTML = `
+      <div class="source-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      </div>
+      <div class="source-info">
+        <div class="source-name">${nameHTML}</div>
+        <div class="source-meta">${vCount} verified · ${fCount} contradicted · ${s.count} total references</div>
+      </div>
+      <div class="source-count">${s.count}×</div>
+    `;
+    list.appendChild(row);
+  });
+}
+
+// ═══════════════════════════════════════════
+// SETTINGS
+// ═══════════════════════════════════════════
+
+async function loadSettings() {
+  const { data, error } = await db.from('settings').select('*').eq('user_id', userId);
+  if (error) { console.error('Load settings error:', error); return; }
+  if (!data) return;
+
+  data.forEach(s => {
+    if (s.key === 'api_provider') $('#s-api-provider').value = s.value;
+    if (s.key === 'confidence_threshold') {
+      $('#s-conf-range').value = s.value;
+      $('#s-conf-val').textContent = s.value + '%';
+    }
+  });
+}
+
+$('#s-conf-range').addEventListener('input', e => {
+  $('#s-conf-val').textContent = e.target.value + '%';
+});
+
+$('#btn-save-settings').addEventListener('click', async () => {
+  const settings = [
+    { key: 'api_provider', value: $('#s-api-provider').value },
+    { key: 'confidence_threshold', value: $('#s-conf-range').value }
+  ];
+
+  for (const s of settings) {
+    await db.from('settings').delete().eq('key', s.key).eq('user_id', userId);
+    const { error } = await db.from('settings').insert({ key: s.key, value: s.value, user_id: userId, updated_at: new Date().toISOString() });
+    if (error) { showToast('Failed to save: ' + s.key, 'error'); console.error(error); return; }
+  }
+  showToast('Settings saved', 'success');
+});
+
+async function checkDbStatus() {
+  const statusEl = $('#db-status');
+  const analysesCountEl = $('#db-analyses-count');
+  const claimsCountEl = $('#db-claims-count');
+
+  try {
+    const { count: aCount, error: aErr } = await db.from('analyses').select('*', { count: 'exact', head: true }).eq('user_id', userId);
+    const { count: cCount, error: cErr } = await db.from('claims').select('*', { count: 'exact', head: true }).eq('user_id', userId);
+
+    if (aErr || cErr) throw new Error('Query failed');
+
+    statusEl.textContent = 'Connected';
+    statusEl.className = 'db-status connected';
+    analysesCountEl.textContent = aCount;
+    claimsCountEl.textContent = cCount;
+  } catch (err) {
+    statusEl.textContent = 'Disconnected';
+    statusEl.className = 'db-status disconnected';
+    analysesCountEl.textContent = '—';
+    claimsCountEl.textContent = '—';
+  }
+}
+
+// ═══════════════════════════════════════════
+// FEATURE: Dashboard Stats
+// ═══════════════════════════════════════════
+
+async function loadDashboardStats() {
+  try {
+    const { count: totalAnalyses } = await db.from('analyses').select('*', { count: 'exact', head: true }).eq('user_id', userId);
+    const { data: analyses } = await db.from('analyses').select('trust_score, verified_count, total_claims').eq('user_id', userId);
+    const { count: totalClaims } = await db.from('claims').select('*', { count: 'exact', head: true }).eq('user_id', userId);
+
+    const avgScore = analyses && analyses.length > 0
+      ? Math.round(analyses.reduce((s, a) => s + (a.trust_score || 0), 0) / analyses.length)
+      : 0;
+
+    const totalVerified = analyses ? analyses.reduce((s, a) => s + (a.verified_count || 0), 0) : 0;
+    const totalClaimsAll = analyses ? analyses.reduce((s, a) => s + (a.total_claims || 0), 0) : 0;
+    const accuracy = totalClaimsAll > 0 ? Math.round((totalVerified / totalClaimsAll) * 100) : 0;
+
+    animateNum('dash-total', totalAnalyses || 0);
+    animateNum('dash-claims', totalClaims || 0);
+
+    // Animate score with % suffix
+    const avgEl = $('#dash-avg-score');
+    const accEl = $('#dash-accuracy');
+    animateNumWithSuffix(avgEl, avgScore, '%');
+    animateNumWithSuffix(accEl, accuracy, '%');
+  } catch (e) {
+    console.warn('Dashboard stats error:', e);
+  }
+}
+
+function animateNumWithSuffix(el, target, suffix) {
+  const dur = 700;
+  const t0 = performance.now();
+  function tick(now) {
+    const t = Math.min((now - t0) / dur, 1);
+    const val = Math.round(target * (1 - Math.pow(1 - t, 3)));
+    el.innerHTML = val + `<span class="stat-unit">${suffix}</span>`;
+    if (t < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
 }
 
 // ═══════════════════════════════════════════
@@ -528,11 +1045,11 @@ function filterClaims(filter) {
 
     recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = false;
+    recognition.interimResults = false; // Disable interim — prevents duplicate/repeated words
     recognition.lang = 'en-US';
 
-    const startText = input.value;
-    let newSpeech = '';
+    const startText = input.value; // Text that was in box before recording
+    let newSpeech = '';             // Only speech added this session
 
     recognition.onstart = () => {
       isRecording = true;
@@ -541,11 +1058,13 @@ function filterClaims(filter) {
     };
 
     recognition.onresult = (e) => {
+      // Only process final results — accumulate new speech
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) {
           newSpeech += (newSpeech ? ' ' : '') + e.results[i][0].transcript.trim();
         }
       }
+      // Show: original text + new speech (no duplication)
       input.value = startText + (startText && newSpeech ? ' ' : '') + newSpeech;
       charCount.textContent = input.value.length;
     };
@@ -608,6 +1127,133 @@ $('#btn-copy')?.addEventListener('click', async () => {
 });
 
 // ═══════════════════════════════════════════
+// FEATURE: Share Analysis
+// ═══════════════════════════════════════════
+
+$('#btn-share')?.addEventListener('click', async () => {
+  if (!currentClaims.length) { showToast('No results to share', 'error'); return; }
+
+  const shareData = {
+    claims: currentClaims.map(c => ({
+      t: c.text, s: c.status, c: c.confidence, e: c.explanation, src: c.source
+    }))
+  };
+
+  try {
+    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(shareData))));
+    const url = window.location.origin + window.location.pathname + '#share=' + encoded;
+
+    if (url.length > 8000) {
+      showToast('Analysis too large to share via URL — use Copy instead', 'error');
+      return;
+    }
+
+    await navigator.clipboard.writeText(url);
+    showToast('Share link copied to clipboard!', 'success');
+  } catch {
+    showToast('Failed to generate share link', 'error');
+  }
+});
+
+// Load shared analysis from URL hash
+function loadSharedAnalysis() {
+  const hash = window.location.hash;
+  if (!hash.startsWith('#share=')) return;
+
+  try {
+    const encoded = hash.slice(7);
+    const data = JSON.parse(decodeURIComponent(escape(atob(encoded))));
+    if (data.claims && data.claims.length) {
+      const claims = data.claims.map((c, i) => ({
+        id: i + 1, text: c.t, originalText: c.t, status: c.s,
+        confidence: c.c, explanation: c.e, source: c.src, sourceUrl: null
+      }));
+      currentClaims = claims;
+      displayResults(claims.map(c => c.text).join('. '), claims);
+      showToast('Shared analysis loaded', 'info');
+      window.location.hash = '';
+    }
+  } catch (e) {
+    console.warn('Failed to load shared analysis:', e);
+  }
+}
+
+// ═══════════════════════════════════════════
+// FEATURE: Batch Analysis
+// ═══════════════════════════════════════════
+
+// Override analyze button to support batch mode
+const originalAnalyzeHandler = btnAnalyze.onclick;
+btnAnalyze.addEventListener('click', async (e) => {
+  const batchMode = $('#batch-mode')?.checked;
+  if (!batchMode) return; // Normal flow handles it
+
+  e.stopImmediatePropagation();
+  const text = input.value.trim();
+  if (!text) { showToast('Paste some text first', 'error'); return; }
+
+  const texts = text.split(/\n---\n/).map(t => t.trim()).filter(t => t.length >= 30);
+  if (texts.length <= 1) {
+    showToast('Use --- on a new line to separate texts for batch mode', 'error');
+    return;
+  }
+
+  showToast(`Batch mode: analyzing ${texts.length} texts...`, 'info');
+
+  let allClaims = [];
+  for (let i = 0; i < texts.length; i++) {
+    showToast(`Analyzing text ${i + 1} of ${texts.length}...`, 'info');
+    try {
+      results.classList.add('hidden');
+      processing.classList.remove('hidden');
+      btnAnalyze.disabled = true;
+
+      $$('.process-step').forEach(s => { s.classList.remove('active', 'done'); s.querySelector('.ps-status').innerHTML = ''; });
+
+      await animateStepStart('ps-extract');
+      const rawClaims = await extractClaimsFromLLM(texts[i]);
+      await animateStepDone('ps-extract', 0, 33);
+
+      await animateStepStart('ps-search');
+      await delay(300);
+      await animateStepDone('ps-search', 33, 66);
+
+      await animateStepStart('ps-verify');
+      const verifyResults = await verifyClaimsWithLLM(rawClaims);
+      await animateStepDone('ps-verify', 66, 100);
+
+      const confThreshold = parseInt($('#s-conf-range')?.value || '75', 10);
+      const verified = rawClaims.map(c => {
+        const v = verifyResults.find(r => r.id === c.id) || {};
+        let status = v.status || 'unverifiable';
+        let confidence = v.confidence || 30;
+        if (status === 'verified' && confidence < confThreshold) status = 'unverifiable';
+        return {
+          id: allClaims.length + c.id,
+          text: c.text, originalText: c.originalSentence || c.text,
+          status, confidence,
+          explanation: v.explanation || 'Could not verify.',
+          source: v.source || 'No source', sourceUrl: v.sourceUrl || null
+        };
+      });
+      allClaims = allClaims.concat(verified);
+    } catch (err) {
+      showToast(`Batch ${i + 1} failed: ${err.message}`, 'error');
+    }
+  }
+
+  currentClaims = allClaims;
+  displayResults(texts.join('\n\n---\n\n'), allClaims);
+  btnAnalyze.disabled = false;
+  processing.classList.add('hidden');
+  showToast(`Batch complete: ${allClaims.length} claims from ${texts.length} texts`, 'success');
+
+  // Save combined result
+  try { await saveAnalysis(texts.join('\n---\n'), allClaims); } catch(e) { console.warn(e); }
+  loadDashboardStats();
+}, true); // capture phase to intercept before normal handler
+
+// ═══════════════════════════════════════════
 // UTILITIES
 // ═══════════════════════════════════════════
 
@@ -619,4 +1265,275 @@ function escapeAttr(s) { return s.replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 // INIT
 // ═══════════════════════════════════════════
 
-console.log('Hallucination Hunter loaded (no-DB mode)');
+(async () => {
+  try {
+    await db.from('settings').select('key').limit(1);
+    console.log('Supabase connected');
+  } catch (e) {
+    console.warn('Supabase connection issue:', e);
+  }
+
+  // Load dashboard stats on page load
+  loadDashboardStats();
+
+  // Check for shared analysis in URL
+  loadSharedAnalysis();
+})();
+
+// ═══════════════════════════════════════════
+// GLOBAL SEARCH
+// ═══════════════════════════════════════════
+(() => {
+  const searchToggle = $('#global-search-toggle');
+  const searchOverlay = $('#search-overlay');
+  const searchInput = $('#search-input');
+  const searchResults = $('#search-results');
+  const searchClose = $('#search-close');
+  const typingEl = $('#search-typing');
+
+  if (!searchToggle || !searchOverlay) return;
+
+  // ─── Typing Animation ─────────────────
+  const phrases = [
+    'Search analyses…',
+    'Find verified claims…',
+    'Look up sources…',
+    'Search fact-checks…',
+    'Find hallucinations…'
+  ];
+  let phraseIdx = 0;
+  let charIdx = 0;
+  let isDeleting = false;
+  let typingPaused = false;
+
+  function typeLoop() {
+    if (typingPaused) return;
+    const current = phrases[phraseIdx];
+
+    if (!isDeleting) {
+      // Typing forward
+      typingEl.textContent = current.slice(0, charIdx + 1);
+      charIdx++;
+      if (charIdx >= current.length) {
+        // Pause at end of phrase
+        setTimeout(() => { isDeleting = true; typeLoop(); }, 2000);
+        return;
+      }
+      setTimeout(typeLoop, 70 + Math.random() * 40);
+    } else {
+      // Deleting
+      typingEl.textContent = current.slice(0, charIdx);
+      charIdx--;
+      if (charIdx <= 0) {
+        isDeleting = false;
+        phraseIdx = (phraseIdx + 1) % phrases.length;
+        setTimeout(typeLoop, 400);
+        return;
+      }
+      setTimeout(typeLoop, 35);
+    }
+  }
+
+  // Start typing after a small delay
+  setTimeout(typeLoop, 800);
+
+  // Open search
+  function openSearch() {
+    searchOverlay.classList.remove('hidden');
+    setTimeout(() => searchInput.focus(), 50);
+  }
+
+  // Close search
+  function closeSearch() {
+    searchOverlay.classList.add('hidden');
+    searchInput.value = '';
+    searchResults.innerHTML = `<div class="search-empty-state">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#c4bdb4" stroke-width="1.2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <p>Type to search across your analyses, claims and sources</p>
+    </div>`;
+  }
+
+  // Toggle
+  searchToggle.addEventListener('click', openSearch);
+  searchClose.addEventListener('click', closeSearch);
+
+  // Click backdrop to close
+  searchOverlay.addEventListener('click', (e) => {
+    if (e.target === searchOverlay) closeSearch();
+  });
+
+  // ESC key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !searchOverlay.classList.contains('hidden')) {
+      closeSearch();
+    }
+    // Cmd/Ctrl + K shortcut
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      if (searchOverlay.classList.contains('hidden')) {
+        openSearch();
+      } else {
+        closeSearch();
+      }
+    }
+  });
+
+  // Debounced search
+  let searchTimer = null;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    const query = searchInput.value.trim();
+    if (!query) {
+      closeSearch();
+      openSearch();
+      return;
+    }
+    searchTimer = setTimeout(() => performSearch(query), 250);
+  });
+
+  // Highlight matching text
+  function highlight(text, query) {
+    if (!text) return '';
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return text.replace(new RegExp(`(${escaped})`, 'gi'), '<mark>$1</mark>');
+  }
+
+  // Perform search across Supabase
+  async function performSearch(query) {
+    searchResults.innerHTML = `<div class="search-empty-state"><p>Searching…</p></div>`;
+
+    const lowerQ = query.toLowerCase();
+    let html = '';
+
+    try {
+      // 1. Search analyses (history) — correct columns: trust_score, not overall_score
+      const { data: analyses, error: aErr } = await db
+        .from('analyses')
+        .select('id, input_text, trust_score, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (aErr) console.warn('Search analyses error:', aErr.message);
+
+      const matchedAnalyses = (analyses || []).filter(a =>
+        (a.input_text || '').toLowerCase().includes(lowerQ)
+      );
+
+      // 2. Search claims — separate table with analysis_id
+      const { data: claims, error: cErr } = await db
+        .from('claims')
+        .select('id, analysis_id, claim_text, status, confidence, explanation, source_url, source_name, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (cErr) console.warn('Search claims error:', cErr.message);
+
+      const matchedClaims = (claims || []).filter(c =>
+        (c.claim_text || '').toLowerCase().includes(lowerQ) ||
+        (c.explanation || '').toLowerCase().includes(lowerQ)
+      );
+
+      // 3. Sources — extracted from claims (source_url / source_name)
+      const sourceMap = new Map();
+      (claims || []).forEach(c => {
+        if (c.source_url) {
+          const key = c.source_url;
+          if (!sourceMap.has(key)) {
+            sourceMap.set(key, { url: c.source_url, name: c.source_name || c.source_url, count: 0 });
+          }
+          sourceMap.get(key).count++;
+        }
+      });
+      const allSources = [...sourceMap.values()];
+      const matchedSources = allSources.filter(s =>
+        s.url.toLowerCase().includes(lowerQ) ||
+        s.name.toLowerCase().includes(lowerQ)
+      );
+
+      // Build results HTML
+      if (matchedAnalyses.length === 0 && matchedClaims.length === 0 && matchedSources.length === 0) {
+        searchResults.innerHTML = `<div class="search-no-results">
+          <p>No results found for "<strong>${query}</strong>"</p>
+        </div>`;
+        return;
+      }
+
+      // Analyses section
+      if (matchedAnalyses.length > 0) {
+        html += `<div class="search-section-label">Analyses (${matchedAnalyses.length})</div>`;
+        matchedAnalyses.slice(0, 5).forEach(a => {
+          const preview = (a.input_text || '').slice(0, 80);
+          const score = a.trust_score != null ? `${a.trust_score}%` : '—';
+          const date = new Date(a.created_at).toLocaleDateString();
+          html += `<div class="search-result-item" data-action="view-analysis" data-id="${a.id}">
+            <div class="search-result-icon history">📊</div>
+            <div class="search-result-info">
+              <div class="search-result-title">${highlight(preview, query)}…</div>
+              <div class="search-result-meta">Score: ${score} · ${date}</div>
+            </div>
+          </div>`;
+        });
+      }
+
+      // Claims section
+      if (matchedClaims.length > 0) {
+        html += `<div class="search-section-label">Claims (${matchedClaims.length})</div>`;
+        matchedClaims.slice(0, 5).forEach(c => {
+          const text = (c.claim_text || '').slice(0, 80);
+          const status = c.status || 'unknown';
+          const date = c.created_at ? new Date(c.created_at).toLocaleDateString() : '';
+          html += `<div class="search-result-item" data-action="view-analysis" data-id="${c.analysis_id}">
+            <div class="search-result-icon claim">💬</div>
+            <div class="search-result-info">
+              <div class="search-result-title">${highlight(text, query)}</div>
+              <div class="search-result-meta">${status} · ${date}</div>
+            </div>
+          </div>`;
+        });
+      }
+
+      // Sources section
+      if (matchedSources.length > 0) {
+        html += `<div class="search-section-label">Sources (${matchedSources.length})</div>`;
+        matchedSources.slice(0, 5).forEach(s => {
+          html += `<div class="search-result-item" data-action="open-source" data-url="${s.url}">
+            <div class="search-result-icon source">🔗</div>
+            <div class="search-result-info">
+              <div class="search-result-title">${highlight(s.name, query)}</div>
+              <div class="search-result-meta">${highlight(s.url, query)} · Used ${s.count}x</div>
+            </div>
+          </div>`;
+        });
+      }
+
+      searchResults.innerHTML = html;
+
+      // Click handlers for results
+      searchResults.querySelectorAll('.search-result-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const action = item.dataset.action;
+          closeSearch();
+
+          if (action === 'view-analysis') {
+            switchView('history');
+            setTimeout(() => {
+              const id = item.dataset.id;
+              if (id && typeof viewHistoryDetail === 'function') viewHistoryDetail(id);
+            }, 300);
+          } else if (action === 'open-source') {
+            const url = item.dataset.url;
+            if (url) window.open(url, '_blank');
+          }
+        });
+      });
+
+    } catch (err) {
+      console.error('Search error:', err);
+      searchResults.innerHTML = `<div class="search-no-results">
+        <p>Search error: ${err.message}</p>
+      </div>`;
+    }
+  }
+})();
