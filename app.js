@@ -428,17 +428,69 @@ Respond in JSON:
   };
 
   const results = result.results || [];
-  // STRICT validation: only whitelisted sources get URLs, everything else → null
+  // Source URL: prefer LLM's specific URL, fallback to whitelist homepage
   return results.map(r => {
     const srcName = (r.source || '').toLowerCase().trim();
-    if (knownSourceUrls.hasOwnProperty(srcName)) {
-      r.sourceUrl = knownSourceUrls[srcName]; // Use verified URL (or null)
-    } else {
-      // NOT in whitelist → strip any LLM-generated URL (likely hallucinated)
+    const llmUrl = r.sourceUrl;
+    
+    // 1. If LLM gave a valid URL with a path (specific page), always keep it
+    if (llmUrl && /^https?:\/\/[a-z0-9.-]+\.[a-z]{2,}\//i.test(llmUrl)) {
+      r.sourceUrl = llmUrl;
+    }
+    // 2. Fallback: use whitelist homepage URL for known sources
+    else if (knownSourceUrls.hasOwnProperty(srcName) && knownSourceUrls[srcName]) {
+      r.sourceUrl = knownSourceUrls[srcName];
+    }
+    // 3. Keep any valid http URL from LLM even without path
+    else if (llmUrl && /^https?:\/\//i.test(llmUrl)) {
+      r.sourceUrl = llmUrl;
+    }
+    // 4. No URL
+    else {
       r.sourceUrl = null;
     }
     return r;
   });
+}
+
+
+// ═══════════════════════════════════════════
+// REAL SOURCE FINDER - Web Search
+// ═══════════════════════════════════════════
+
+async function findRealSources(claims) {
+  // For each claim, search the web for the REAL source page
+  const promises = claims.map(async (claim) => {
+    try {
+      // Build search query: claim text + source name
+      const searchQuery = claim.text.substring(0, 120) + (claim.source ? ' ' + claim.source : '');
+      
+      // Call our Vercel search API
+      const resp = await fetch('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: searchQuery })
+      });
+      
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.results && data.results.length > 0) {
+          const topResult = data.results[0];
+          claim.sourceUrl = topResult.url;
+          if (topResult.title) {
+            // Show: "Source Name via RealSite.com"
+            const domain = new URL(topResult.url).hostname.replace('www.', '');
+            claim.source = (claim.source || topResult.title) + ' (' + domain + ')';
+          }
+        }
+      }
+    } catch (e) {
+      console.log('Source search failed for:', claim.text.substring(0, 40));
+    }
+    return claim;
+  });
+  
+  return Promise.all(promises);
 }
 
 // ═══════════════════════════════════════════
@@ -505,8 +557,11 @@ async function runAnalysis(text) {
       };
     });
 
-    currentClaims = verified;
-    displayResults(text, verified);
+    // Step 4: Find REAL source URLs from Wikipedia
+    const withRealSources = await findRealSources(verified);
+    
+    currentClaims = withRealSources;
+    displayResults(text, withRealSources);
 
     // Save to Supabase
     await saveAnalysis(text, verified);
