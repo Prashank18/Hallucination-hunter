@@ -1,3 +1,4 @@
+// Hallucination Hunter v2.1 - Updated 2026-09-18
 // ═══════════════════════════════════════════
 // HALLUCINATION HUNTER — Full App with Supabase
 // ═══════════════════════════════════════════
